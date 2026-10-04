@@ -285,12 +285,16 @@ app.put('/api/images/:id/contours', (req, res) => {
       if (!c || typeof c !== 'object') throw new Error(`第 ${i + 1} 个细胞数据格式错误`);
       const { outer, holes } = geo.validateCell({ ...c, _seq: i + 1 }, img.width, img.height);
       const name = typeof c.name === 'string' ? c.name.trim().slice(0, 50) : '';
-      return {
+      const written = {
         id: typeof c.id === 'string' && c.id ? c.id : crypto.randomUUID(),
         name,
         outer: outer.map(roundPoint),
         holes: holes.map((h) => h.map(roundPoint))
       };
+      // 以实际写入的坐标（三位小数）为准再完整校验：取整可能使相邻顶点重合、
+      // 边自交、孔洞贴边或互触——违反规则时指出具体细胞/孔洞，整批不写入
+      geo.validateWrittenCell({ ...written, _seq: i + 1 }, img.width, img.height);
+      return written;
     });
   } catch (e) {
     return badRequest(res, e.message);
@@ -427,12 +431,16 @@ app.put('/api/images/:id/fields', (req, res) => {
       if (!f || typeof f !== 'object') throw new Error(`第 ${i + 1} 个视野数据格式错误`);
       const { outer, holes } = geo.validateField(f, img.width, img.height, i + 1);
       const name = typeof f.name === 'string' ? f.name.trim().slice(0, 50) : '';
-      return {
+      const written = {
         id: typeof f.id === 'string' && f.id ? f.id : crypto.randomUUID(),
         name,
         outer: outer.map(roundPoint),
         holes: holes.map((h) => h.map(roundPoint))
       };
+      // 以实际写入的坐标（三位小数）为准再完整校验（含净面积为正）：
+      // 取整引起的顶点重合/自交/孔洞贴边/互触同样指出具体视野并整批拒绝
+      geo.validateWrittenField(written, img.width, img.height, i + 1);
+      return written;
     });
   } catch (e) {
     return badRequest(res, e.message);

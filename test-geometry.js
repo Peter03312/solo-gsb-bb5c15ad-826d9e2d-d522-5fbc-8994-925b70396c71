@@ -2,9 +2,11 @@
 
 // 几何校验/测量快速自测（node test-geometry.js）
 const assert = require('assert');
-const { validateCell, measureCell } = require('./server/geometry');
+const { validateCell, validateField, validateWrittenCell, validateWrittenField, measureCell } = require('./server/geometry');
 
 const W = 100, H = 100;
+// 与保存接口一致的落盘精度：三位小数
+const r3 = (ring) => ring.map((p) => ({ x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }));
 
 // 1. 正常矩形细胞 + 内部孔洞
 {
@@ -96,6 +98,45 @@ const W = 100, H = 100;
   const h2 = [{x:31,y:10},{x:50,y:10},{x:50,y:30},{x:31,y:30}];
   assert.doesNotThrow(() => validateCell({ _seq: 1, outer, holes: [h1, h2] }, W, H));
   console.log('ok 11 分离孔洞通过');
+}
+
+// 12. 写入坐标校验：原始坐标合法、三位小数取整后相邻顶点重合 → 拒绝并注明写入坐标
+{
+  const outer = [{x:1,y:1},{x:1.0004,y:1},{x:5,y:5}];
+  assert.doesNotThrow(() => validateCell({ _seq: 1, outer }, W, H)); // 原始坐标合法
+  assert.throws(() => validateWrittenCell({ _seq: 1, outer: r3(outer) }, W, H),
+    /重复（顶点坐标按三位小数保存/);
+  console.log('ok 12 写入坐标校验：取整后相邻顶点重合被拒绝并注明');
+}
+
+// 13. 写入坐标校验：取整后孔洞贴上外轮廓 → 拒绝；合法图形原样通过
+{
+  const outer = [{x:0,y:0},{x:50,y:0},{x:50,y:50},{x:0,y:50}];
+  const hole = [{x:10,y:0.0004},{x:20,y:0.0004},{x:15,y:10}];
+  assert.doesNotThrow(() => validateCell({ _seq: 1, outer, holes: [hole] }, W, H)); // 原始坐标合法
+  assert.throws(
+    () => validateWrittenCell({ _seq: 1, outer: r3(outer), holes: [r3(hole)] }, W, H),
+    /严格位于所属外轮廓内部.*（顶点坐标按三位小数保存/);
+  // 合法图形：写入坐标校验通过且返回标准化几何（精度不变）
+  const okOuter = r3([{x:10.0006,y:10.0004},{x:50.0004,y:10.0006},{x:50.0006,y:50.0004},{x:10.0004,y:50.0006}]);
+  const r = validateWrittenCell({ _seq: 1, outer: okOuter, holes: [] }, W, H);
+  assert.strictEqual(r.outer.length, 4);
+  assert.deepStrictEqual(r.outer, okOuter);
+  console.log('ok 13 写入坐标校验：取整后孔洞贴边被拒绝，合法图形通过');
+}
+
+// 14. 视野写入坐标校验：取整后孔洞互触 → 拒绝并注明；视野净面积规则同样按写入坐标
+{
+  const outer = [{x:0,y:0},{x:50,y:0},{x:50,y:50},{x:0,y:50}];
+  const h1 = [{x:10,y:10},{x:15,y:10},{x:15,y:15},{x:10,y:15}];
+  const h2 = [{x:15.0004,y:10},{x:20,y:10},{x:20,y:15},{x:15.0004,y:15}];
+  assert.doesNotThrow(() => validateField({ outer, holes: [h1, h2] }, W, H, 1)); // 原始坐标合法
+  assert.throws(
+    () => validateWrittenField({ outer: r3(outer), holes: [r3(h1), r3(h2)] }, W, H, 1),
+    /孔洞 1 与孔洞 2 相互接触或重叠.*（顶点坐标按三位小数保存/);
+  // 合法视野：写入坐标校验通过
+  assert.doesNotThrow(() => validateWrittenField({ outer: r3(outer), holes: [r3(h1)] }, W, H, 1));
+  console.log('ok 14 视野写入坐标校验：取整后孔洞互触被拒绝，合法视野通过');
 }
 
 console.log('\n全部几何自测通过 ✔');

@@ -299,6 +299,31 @@ function validateField(field, width, height, seq) {
   return { outer, holes };
 }
 
+// 落盘坐标校验（保存接口专用）：轮廓/视野的顶点坐标统一按三位小数保存，
+// 取整可能使原本不同的相邻顶点重合、边自交、孔洞贴边或互触。保存接口先校验
+// 原始坐标，再以【实际写入的坐标】（三位小数取整后的图形）为准完整套用同一套
+// 几何规则；下列包装在校验失败时于原因后注明问题出自取整后的写入坐标，
+// 由调用方整批拒绝（HTTP 400：不写入、不推进草稿版本、不留修订）。
+const WRITTEN_COORD_NOTE = '顶点坐标按三位小数保存，该问题出现在取整后实际写入的图形中';
+
+// 以实际写入（三位小数取整后）的坐标为准校验一个细胞；规则与 validateCell 完全一致。
+function validateWrittenCell(cell, width, height) {
+  try {
+    return validateCell(cell, width, height);
+  } catch (e) {
+    throw new Error(`${e.message}（${WRITTEN_COORD_NOTE}）`);
+  }
+}
+
+// 以实际写入（三位小数取整后）的坐标为准校验一个取样视野；规则与 validateField 完全一致。
+function validateWrittenField(field, width, height, seq) {
+  try {
+    return validateField(field, width, height, seq);
+  } catch (e) {
+    throw new Error(`${e.message}（${WRITTEN_COORD_NOTE}）`);
+  }
+}
+
 // scale: 每像素对应的微米数
 function measureCell(outer, holes, scale) {
   const areaPx = shoelaceArea(outer) - holes.reduce((s, h) => s + shoelaceArea(h), 0);
@@ -314,6 +339,9 @@ module.exports = {
   validateCompoundRing,
   validateCell,
   validateField,
+  validateWrittenCell,
+  validateWrittenField,
+  WRITTEN_COORD_NOTE,
   measureCell,
   shoelaceArea,
   signedArea,
