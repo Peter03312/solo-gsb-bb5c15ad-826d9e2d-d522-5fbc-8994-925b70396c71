@@ -4,7 +4,8 @@
 //
 // 操作者在来源（已发布报告）与目标（另一张图片草稿）两张原图上按相同顺序
 // 各标记 3 个不共线对应点，据此解出唯一仿射变换，把来源全部细胞的外轮廓
-// 与孔洞映射到目标像素坐标系，再套用与「保存轮廓」完全相同的几何校验。
+// 与孔洞映射到目标像素坐标系、按 3 位小数取整（与轮廓存储精度一致），
+// 再以实际写入坐标套用与「保存轮廓」完全相同的几何校验。
 //
 // 预览与确认提交共用 buildMigration：同一变换、同一校验；
 // 任一步失败抛出带原因的 Error（调用方整批不写入）。
@@ -17,8 +18,8 @@ function isNum(v) {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
-const round3 = (v) => Math.round(v * 1000) / 1000;
-function roundPoint(p) { return { x: round3(p.x), y: round3(p.y) }; }
+// 与「保存轮廓」同一份落盘精度（坐标保留 3 位小数），避免两处取整规则漂移
+const roundPoint = geo.roundPoint;
 
 // 三点张成三角形面积的两倍（带符号）
 function cross2(a, b, c) {
@@ -111,8 +112,9 @@ function buildMigration(report, image, rawSourcePoints, rawTargetPoints) {
     };
     let error = null;
     try {
-      // 与「保存全部轮廓」同一套几何规则：越界/自交/孔洞不严格在内/孔洞互触
-      geo.validateCell({ name, _seq: i + 1, outer: mapped.outer, holes: mapped.holes }, image.width, image.height);
+      // 与「保存全部轮廓」同一套落盘几何规则：这里的环已经是取整后的目标像素坐标，
+      // validateStoredCell 会以实际写入坐标复核（越界/自交/孔洞不严格在内/孔洞互触）
+      geo.validateStoredCell({ name, _seq: i + 1, outer: mapped.outer, holes: mapped.holes }, image.width, image.height);
     } catch (e) {
       error = e.message;
     }

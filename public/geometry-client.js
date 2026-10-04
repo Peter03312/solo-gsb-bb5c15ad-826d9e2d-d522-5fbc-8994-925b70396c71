@@ -103,31 +103,46 @@ function gDupPoint(poly) {
   return null;
 }
 
+// 落盘精度：服务端保存时先把顶点保留 3 位小数再校验。页端即时校验按同一规则预判，
+// 避免「校验时不同、落盘后重合」的几何被提交后才被服务端拒绝（最终仍以服务端为准）。
+function gRoundPoint(p) {
+  return { x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 };
+}
+function gStoredCell(cell) {
+  return {
+    ...cell,
+    outer: (cell.outer || []).map(gRoundPoint),
+    holes: (cell.holes || []).map((h) => h.map(gRoundPoint))
+  };
+}
+
 // 整份草稿即时校验，返回错误字符串或 null
 function clientValidate(cells, width, height) {
   for (let i = 0; i < cells.length; i++) {
-    const cell = cells[i];
-    const label = cell.name ? `细胞「${cell.name}」` : `第 ${i + 1} 个细胞`;
+    const raw = cells[i];
+    const label = raw.name ? `细胞「${raw.name}」` : `第 ${i + 1} 个细胞`;
+    if (!Array.isArray(raw.outer) || raw.outer.length < 3) return `${label}：外轮廓至少需要 3 个顶点`;
+    // 与服务端一致：以实际写入的 3 位小数坐标校验
+    const cell = gStoredCell(raw);
     const outer = cell.outer;
-    if (outer.length < 3) return `${label}：外轮廓至少需要 3 个顶点`;
     const dup = gDupPoint(outer);
-    if (dup) return `${label}：第 ${dup} 个点重复`;
+    if (dup) return `${label}：第 ${dup} 个点保留 3 位小数后与下一点重合，请拉开两点后再保存`;
     const oob = outer.findIndex((p) => p.x < 0 || p.y < 0 || p.x > width || p.y > height);
     if (oob >= 0) return `${label}：第 ${oob + 1} 个顶点越出图片范围`;
     const si = gSelfIntersection(outer);
-    if (si) return `${label}：第 ${si[0]}、${si[1]} 条边相交/接触，轮廓不得自交`;
+    if (si) return `${label}：第 ${si[0]}、${si[1]} 条边在保留 3 位小数后相交/接触，轮廓不得自交`;
 
     for (let hi = 0; hi < cell.holes.length; hi++) {
       const hole = cell.holes[hi];
       const hl = `${label} 的孔洞 ${hi + 1}`;
       if (hole.length < 3) return `${hl}：至少需要 3 个顶点`;
-      if (gDupPoint(hole)) return `${hl}：存在重复点`;
+      if (gDupPoint(hole)) return `${hl}：顶点保留 3 位小数后重合`;
       if (hole.some((p) => p.x < 0 || p.y < 0 || p.x > width || p.y > height))
         return `${hl}：顶点越出图片范围`;
       const hsi = gSelfIntersection(hole);
-      if (hsi) return `${hl}：自交`;
+      if (hsi) return `${hl}：保留 3 位小数后自交`;
       if (!gRingStrictlyInside(hole, outer))
-        return `${hl}：必须严格位于所属外轮廓内部，且不得接触外轮廓`;
+        return `${hl}：保留 3 位小数后未严格位于外轮廓内部或与外轮廓接触，请把孔洞向内移动后再保存`;
     }
     for (let a = 0; a < cell.holes.length; a++) {
       for (let b = a + 1; b < cell.holes.length; b++) {
@@ -141,7 +156,7 @@ function clientValidate(cells, width, height) {
             if (touch) break;
           }
         }
-        if (touch) return `${label}：孔洞 ${a + 1} 与孔洞 ${b + 1} 相互接触或重叠`;
+        if (touch) return `${label}：孔洞 ${a + 1} 与孔洞 ${b + 1} 保留 3 位小数后相互接触或重叠`;
       }
     }
   }
@@ -199,32 +214,34 @@ function gPointInFieldNet(p, field) {
   return true;
 }
 
-// 视野整批即时校验：规则与服务端 validateField 一致（含净面积非正）
+// 视野整批即时校验：规则与服务端 validateStoredField 一致（先保留 3 位小数、含净面积非正）
 function clientValidateFields(fields, width, height) {
   for (let i = 0; i < fields.length; i++) {
-    const f = fields[i];
-    const label = f.name ? `视野「${f.name}」` : `第 ${i + 1} 个视野`;
+    const raw = fields[i];
+    const label = raw.name ? `视野「${raw.name}」` : `第 ${i + 1} 个视野`;
+    if (!Array.isArray(raw.outer) || raw.outer.length < 3) return `${label}：外轮廓至少需要 3 个顶点`;
+    // 与服务端一致：以实际写入的 3 位小数坐标校验
+    const f = gStoredCell(raw);
     const outer = f.outer;
-    if (outer.length < 3) return `${label}：外轮廓至少需要 3 个顶点`;
     const dup = gDupPoint(outer);
-    if (dup) return `${label}：第 ${dup} 个点重复`;
+    if (dup) return `${label}：第 ${dup} 个点保留 3 位小数后与下一点重合，请拉开两点后再保存`;
     if (outer.some((p) => p.x < 0 || p.y < 0 || p.x > width || p.y > height))
       return `${label}：存在越出图片范围的顶点`;
     const si = gSelfIntersection(outer);
-    if (si) return `${label}：第 ${si[0]}、${si[1]} 条边相交/接触，轮廓不得自交`;
+    if (si) return `${label}：第 ${si[0]}、${si[1]} 条边在保留 3 位小数后相交/接触，轮廓不得自交`;
 
-    for (let hi = 0; hi < (f.holes || []).length; hi++) {
+    for (let hi = 0; hi < f.holes.length; hi++) {
       const hole = f.holes[hi];
       const hl = `${label} 的孔洞 ${hi + 1}`;
       if (hole.length < 3) return `${hl}：至少需要 3 个顶点`;
-      if (gDupPoint(hole)) return `${hl}：存在重复点`;
+      if (gDupPoint(hole)) return `${hl}：顶点保留 3 位小数后重合`;
       if (hole.some((p) => p.x < 0 || p.y < 0 || p.x > width || p.y > height))
         return `${hl}：顶点越出图片范围`;
-      if (gSelfIntersection(hole)) return `${hl}：自交`;
+      if (gSelfIntersection(hole)) return `${hl}：保留 3 位小数后自交`;
       if (!gRingStrictlyInside(hole, outer))
-        return `${hl}：必须严格位于视野外轮廓内部，且不得接触外轮廓`;
+        return `${hl}：保留 3 位小数后未严格位于视野外轮廓内部或与外轮廓接触`;
     }
-    for (let a = 0; a < (f.holes || []).length; a++) {
+    for (let a = 0; a < f.holes.length; a++) {
       for (let b = a + 1; b < f.holes.length; b++) {
         let touch = gPointStrictlyInside(f.holes[b][0], f.holes[a]) ||
                     gPointStrictlyInside(f.holes[a][0], f.holes[b]);
@@ -236,10 +253,10 @@ function clientValidateFields(fields, width, height) {
             if (touch) break;
           }
         }
-        if (touch) return `${label}：孔洞 ${a + 1} 与孔洞 ${b + 1} 相互接触或重叠`;
+        if (touch) return `${label}：孔洞 ${a + 1} 与孔洞 ${b + 1} 保留 3 位小数后相互接触或重叠`;
       }
     }
-    const netPx = gArea(outer) - (f.holes || []).reduce((s, h) => s + gArea(h), 0);
+    const netPx = gArea(outer) - f.holes.reduce((s, h) => s + gArea(h), 0);
     if (!(netPx > GEOM_EPS)) return `${label}：扣除孔洞后的净面积必须为正`;
   }
   return null;

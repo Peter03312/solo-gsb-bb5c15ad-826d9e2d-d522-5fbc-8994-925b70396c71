@@ -299,6 +299,55 @@ function validateField(field, width, height, seq) {
   return { outer, holes };
 }
 
+// ---------- 落盘精度（坐标保留 3 位小数）：先取整、再校验 ----------
+//
+// 保存接口必须以【实际写入的坐标】为准：原始顶点先保留 3 位小数，再对取整后的环
+// 套用全部既有规则。否则会出现「(1,1) 与 (1.0004,1) 校验时不同、落盘后重合」这类
+// 无效几何被成功写入的问题（修订与后续分析会读到重合点/自交/孔洞贴边或互触的环）。
+
+const round3 = (v) => Math.round(v * 1000) / 1000;
+function roundPoint(p) { return { x: round3(p.x), y: round3(p.y) }; }
+
+// 先确认全部顶点都是有限数（错误位置按原始序号报告），再按落盘精度取整
+function roundRing(rawPoints, what) {
+  return parsePoints(rawPoints, what).map(roundPoint);
+}
+
+// 取整后校验失败时补充统一说明：出错对象仍由既有 label 与边/孔洞编号指出
+function withStoredHint(e) {
+  e.message = `${e.message}（几何校验以实际写入的坐标为准：顶点保留 3 位小数，` +
+    '取整后相邻顶点重合、边自交/回折、孔洞贴边或互触均不合法）';
+  return e;
+}
+
+// 按实际写入坐标校验一个细胞：原始顶点须为有限数 → 保留 3 位小数 →
+// 对取整后的外环/孔洞套用与 validateCell 完全相同的规则。返回取整后的 {outer, holes}。
+function validateStoredCell(cell, width, height) {
+  const label = cell.name ? `细胞「${cell.name}」` : `第 ${cell._seq} 个细胞`;
+  try {
+    const outer = roundRing(cell.outer, `${label} 的外轮廓`);
+    const holes = (Array.isArray(cell.holes) ? cell.holes : []).map((h, i) =>
+      roundRing(h, `${label} 的孔洞 ${i + 1}`));
+    return validateCompoundRing(outer, holes, width, height, label);
+  } catch (e) {
+    throw withStoredHint(e);
+  }
+}
+
+// 按实际写入坐标校验一个视野：规则同 validateField（含净面积必须为正），
+// 但校验对象是保留 3 位小数后的外环/孔洞。返回取整后的 {outer, holes}。
+function validateStoredField(field, width, height, seq) {
+  const label = field.name ? `视野「${field.name}」` : `第 ${seq} 个视野`;
+  try {
+    const outer = roundRing(field.outer, `${label} 的外轮廓`);
+    const holes = (Array.isArray(field.holes) ? field.holes : []).map((h, i) =>
+      roundRing(h, `${label} 的孔洞 ${i + 1}`));
+    return validateField({ name: field.name, outer, holes }, width, height, seq);
+  } catch (e) {
+    throw withStoredHint(e);
+  }
+}
+
 // scale: 每像素对应的微米数
 function measureCell(outer, holes, scale) {
   const areaPx = shoelaceArea(outer) - holes.reduce((s, h) => s + shoelaceArea(h), 0);
@@ -314,6 +363,10 @@ module.exports = {
   validateCompoundRing,
   validateCell,
   validateField,
+  validateStoredCell,
+  validateStoredField,
+  round3,
+  roundPoint,
   measureCell,
   shoelaceArea,
   signedArea,

@@ -113,8 +113,7 @@ function checkVersion(img, version) {
   return Number.isInteger(version) && version === img.version;
 }
 
-const round3 = (v) => Math.round(v * 1000) / 1000;
-function roundPoint(p) { return { x: round3(p.x), y: round3(p.y) }; }
+const { roundPoint } = geo;
 
 // 重算整份草稿中所有细胞的测量值（未定标时结果为 null）
 function recompute(cells, calib) {
@@ -280,22 +279,25 @@ app.put('/api/images/:id/contours', (req, res) => {
 
   let next;
   try {
-    // 先全部校验，任何一个细胞/孔洞失败都会抛出，数据库不发生任何写入
+    // 以实际写入的坐标为准：先把顶点保留 3 位小数，再对取整后的整批几何做全部既有校验
+    // （取整导致相邻点重合/边自交/孔洞贴边或互触都会抛出并指出具体对象），
+    // 任何一个细胞失败都不会写入，版本与修订均不变。
     next = rawCells.map((c, i) => {
       if (!c || typeof c !== 'object') throw new Error(`第 ${i + 1} 个细胞数据格式错误`);
-      const { outer, holes } = geo.validateCell({ ...c, _seq: i + 1 }, img.width, img.height);
+      const { outer, holes } = geo.validateStoredCell({ ...c, _seq: i + 1 }, img.width, img.height);
       const name = typeof c.name === 'string' ? c.name.trim().slice(0, 50) : '';
       return {
         id: typeof c.id === 'string' && c.id ? c.id : crypto.randomUUID(),
         name,
-        outer: outer.map(roundPoint),
-        holes: holes.map((h) => h.map(roundPoint))
+        outer,
+        holes
       };
     });
   } catch (e) {
     return badRequest(res, e.message);
   }
 
+  // 测量值按落盘坐标（已取整）计算
   next = recompute(next, img.calib);
 
   const updated = commitDraft(img, { cells: next }, 'contours',
@@ -422,16 +424,18 @@ app.put('/api/images/:id/fields', (req, res) => {
 
   let next;
   try {
-    // 先全部校验：越界/自交/孔洞不严格在内或互相接触重叠/净面积非正都会抛出，数据库不写入
+    // 以实际写入的坐标为准：先把顶点保留 3 位小数，再对取整后的整批视野做全部既有校验
+    // （越界/自交/孔洞不严格在内或互相接触重叠/取整后净面积非正都会抛出并指出具体视野），
+    // 任何一个视野失败都不写入。
     next = rawFields.map((f, i) => {
       if (!f || typeof f !== 'object') throw new Error(`第 ${i + 1} 个视野数据格式错误`);
-      const { outer, holes } = geo.validateField(f, img.width, img.height, i + 1);
+      const { outer, holes } = geo.validateStoredField(f, img.width, img.height, i + 1);
       const name = typeof f.name === 'string' ? f.name.trim().slice(0, 50) : '';
       return {
         id: typeof f.id === 'string' && f.id ? f.id : crypto.randomUUID(),
         name,
-        outer: outer.map(roundPoint),
-        holes: holes.map((h) => h.map(roundPoint))
+        outer,
+        holes
       };
     });
   } catch (e) {
